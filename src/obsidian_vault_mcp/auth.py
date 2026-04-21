@@ -1,9 +1,12 @@
 """Bearer token authentication middleware for the vault MCP server."""
 
+import hmac
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from . import token_store
 from .config import VAULT_MCP_TOKEN
 
 # Paths that don't require bearer auth (OAuth flow + health)
@@ -49,11 +52,17 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             )
 
         token = auth_header[7:]
-        if token != VAULT_MCP_TOKEN:
-            return JSONResponse(
-                {"error": "Invalid token"},
-                status_code=401,
-                headers={"WWW-Authenticate": _challenge_header(request, "invalid_token")},
-            )
 
-        return await call_next(request)
+        # Admin token (VAULT_MCP_TOKEN) bypasses the OAuth store -- for direct
+        # bearer clients that don't run the OAuth flow.
+        if VAULT_MCP_TOKEN and hmac.compare_digest(token, VAULT_MCP_TOKEN):
+            return await call_next(request)
+
+        if await token_store.validate_access(token):
+            return await call_next(request)
+
+        return JSONResponse(
+            {"error": "Invalid token"},
+            status_code=401,
+            headers={"WWW-Authenticate": _challenge_header(request, "invalid_token")},
+        )

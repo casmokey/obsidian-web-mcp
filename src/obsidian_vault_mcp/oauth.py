@@ -24,7 +24,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.routing import Route
 
-from . import config
+from . import config, token_store
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ async def oauth_metadata(request: Request) -> JSONResponse:
         "authorization_endpoint": f"{base_url}/oauth/authorize",
         "token_endpoint": f"{base_url}/oauth/token",
         "registration_endpoint": f"{base_url}/oauth/register",
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
         "response_types_supported": ["code"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
@@ -127,9 +127,10 @@ async def oauth_token(request: Request) -> JSONResponse:
     client_id = form.get("client_id", "")
     client_secret = form.get("client_secret", "")
 
-    # Support both authorization_code and client_credentials grants
     if grant_type == "authorization_code":
         return await _handle_authorization_code(form, client_id, client_secret)
+    elif grant_type == "refresh_token":
+        return await _handle_refresh_token(form, client_id, client_secret)
     elif grant_type == "client_credentials":
         return await _handle_client_credentials(client_id, client_secret)
     else:
@@ -169,16 +170,61 @@ async def _handle_authorization_code(form, client_id: str, client_secret: str) -
         if not hmac.compare_digest(computed_challenge, code_data["code_challenge"]):
             return JSONResponse({"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400)
 
-    logger.info("OAuth token issued via authorization_code grant")
+    access, refresh = await token_store.issue_pair(client_id or "anonymous")
+    logger.info("OAuth token issued via authorization_code grant (client_id=%s)", client_id or "anonymous")
     return JSONResponse({
-        "access_token": config.VAULT_MCP_TOKEN,
+        "access_token": access,
         "token_type": "bearer",
-        "expires_in": 86400,
+        "expires_in": token_store.ACCESS_TOKEN_TTL,
+        "refresh_token": refresh,
+    })
+
+
+async def _handle_refresh_token(form, client_id: str, client_secret: str) -> JSONResponse:
+    """Rotate a refresh token for a new access+refresh pair.
+
+    Public clients (PKCE) may omit client_secret. Confidential clients that
+    present one must have it match the configured secret. In either case the
+    presented client_id must match the refresh token's client_id.
+    """
+    refresh_token_value = form.get("refresh_token", "")
+    if not refresh_token_value or not client_id:
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": "refresh_token and client_id required"},
+            status_code=400,
+        )
+
+    if client_secret:
+        if not config.VAULT_OAUTH_CLIENT_SECRET or not hmac.compare_digest(
+            client_secret, config.VAULT_OAUTH_CLIENT_SECRET
+        ):
+            logger.warning("OAuth refresh_token failed: client_secret mismatch (client_id=%s)", client_id)
+            return JSONResponse({"error": "invalid_client"}, status_code=401)
+
+    rotated = await token_store.rotate_refresh(refresh_token_value, client_id)
+    if rotated is None:
+        logger.info("OAuth refresh_token rejected (client_id=%s)", client_id)
+        return JSONResponse(
+            {"error": "invalid_grant", "error_description": "Invalid, expired, or reused refresh token"},
+            status_code=400,
+        )
+
+    new_access, new_refresh = rotated
+    logger.info("OAuth token rotated via refresh_token grant (client_id=%s)", client_id)
+    return JSONResponse({
+        "access_token": new_access,
+        "token_type": "bearer",
+        "expires_in": token_store.ACCESS_TOKEN_TTL,
+        "refresh_token": new_refresh,
     })
 
 
 async def _handle_client_credentials(client_id: str, client_secret: str) -> JSONResponse:
-    """Exchange client credentials for a bearer token."""
+    """Exchange client credentials for an access token.
+
+    No refresh token is issued: this grant is for server-to-server clients that
+    can re-present their credentials to mint a new access token.
+    """
     if not config.VAULT_OAUTH_CLIENT_SECRET:
         return JSONResponse({"error": "server_error"}, status_code=500)
 
@@ -189,11 +235,12 @@ async def _handle_client_credentials(client_id: str, client_secret: str) -> JSON
         logger.warning(f"OAuth client_credentials failed (client_id={client_id!r})")
         return JSONResponse({"error": "invalid_client"}, status_code=401)
 
+    access, _refresh = await token_store.issue_pair(client_id)
     logger.info("OAuth token issued via client_credentials grant")
     return JSONResponse({
-        "access_token": config.VAULT_MCP_TOKEN,
+        "access_token": access,
         "token_type": "bearer",
-        "expires_in": 86400,
+        "expires_in": token_store.ACCESS_TOKEN_TTL,
     })
 
 
@@ -215,7 +262,7 @@ async def oauth_register(request: Request) -> JSONResponse:
         "client_id": client_id,
         "client_secret": config.VAULT_OAUTH_CLIENT_SECRET,
         "client_name": body.get("client_name", "Obsidian Vault MCP Client"),
-        "grant_types": ["authorization_code"],
+        "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "redirect_uris": body.get("redirect_uris", []),
         "token_endpoint_auth_method": "client_secret_post",

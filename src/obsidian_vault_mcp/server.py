@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from . import token_store
 from .config import VAULT_MCP_PORT, VAULT_MCP_TOKEN, VAULT_PATH
 from .frontmatter_index import FrontmatterIndex
 
@@ -25,6 +26,10 @@ frontmatter_index = FrontmatterIndex()
 async def lifespan(server):
     """Start frontmatter index on server startup, stop on shutdown."""
     logger.info(f"Starting vault MCP server. Vault: {VAULT_PATH}")
+    token_store.init()
+    purged = await token_store.purge_expired()
+    if purged:
+        logger.info(f"OAuth token store: purged {purged} expired rows")
     frontmatter_index.start()
     logger.info(f"Frontmatter index built: {frontmatter_index.file_count} files indexed")
     yield {"frontmatter_index": frontmatter_index}
