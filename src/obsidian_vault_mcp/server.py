@@ -207,6 +207,12 @@ def main():
     if not VAULT_MCP_TOKEN:
         logger.warning("VAULT_MCP_TOKEN is not set -- auth will reject all requests")
 
+    # Initialize the OAuth token store (SQLite-backed). Done here rather than
+    # in the lifespan because FastMCP's streamable_http_app doesn't always
+    # propagate a custom lifespan reliably.
+    token_store.init()
+    logger.info("OAuth token store ready")
+
     # Build the Starlette app with auth middleware and OAuth endpoints
     try:
         from .auth import BearerAuthMiddleware
