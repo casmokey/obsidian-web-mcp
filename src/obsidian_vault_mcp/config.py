@@ -5,10 +5,12 @@ from pathlib import Path
 VAULT_PATH = Path(os.environ.get("VAULT_PATH", os.path.expanduser("~/Obsidian/MyVault")))
 VAULT_MCP_TOKEN = os.environ.get("VAULT_MCP_TOKEN", "")
 VAULT_MCP_PORT = int(os.environ.get("VAULT_MCP_PORT", "8420"))
+# Loopback only by default: a Cloudflare tunnel (or Claude Code on this machine) reaches it there.
+VAULT_MCP_HOST = os.environ.get("VAULT_MCP_HOST", "127.0.0.1")
 
-# OAuth 2.0 client credentials (for Claude app integration)
-VAULT_OAUTH_CLIENT_ID = os.environ.get("VAULT_OAUTH_CLIENT_ID", "vault-mcp-client")
-VAULT_OAUTH_CLIENT_SECRET = os.environ.get("VAULT_OAUTH_CLIENT_SECRET", "")
+# OAuth 2.0 (for Claude app integration): scrypt hash of the connector password typed on the
+# authorize page. Unset = no client can be authorized.
+VAULT_OAUTH_PASSWORD_HASH = os.environ.get("VAULT_OAUTH_PASSWORD_HASH", "")
 VAULT_OAUTH_DB_PATH = os.environ.get(
     "VAULT_OAUTH_DB_PATH",
     os.path.expanduser("~/.local/share/obsidian-vault-mcp/oauth.db"),

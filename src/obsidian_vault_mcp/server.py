@@ -213,34 +213,33 @@ def main():
     token_store.init()
     logger.info("OAuth token store ready")
 
-    # Build the Starlette app with auth middleware and OAuth endpoints
-    try:
-        from .auth import BearerAuthMiddleware
-        from .oauth import oauth_routes
+    # Build the Starlette app with auth middleware and OAuth endpoints. If that fails, stop:
+    # never serve the vault without auth.
+    from .auth import BearerAuthMiddleware
+    from .config import VAULT_MCP_HOST, VAULT_OAUTH_PASSWORD_HASH
+    from .oauth import oauth_routes
 
-        app = mcp.streamable_http_app()
+    if not VAULT_OAUTH_PASSWORD_HASH:
+        logger.warning("VAULT_OAUTH_PASSWORD_HASH is not set -- no OAuth client can be authorized")
 
-        # Mount OAuth routes (these are excluded from bearer auth via the middleware)
-        for route in oauth_routes:
-            app.routes.insert(0, route)
+    app = mcp.streamable_http_app()
 
-        app.add_middleware(BearerAuthMiddleware)
-        logger.info(f"Starting server on port {VAULT_MCP_PORT} with bearer auth + OAuth")
+    # Mount OAuth routes (these are excluded from bearer auth via the middleware)
+    for route in oauth_routes:
+        app.routes.insert(0, route)
 
-        import uvicorn
-        uvicorn.run(
-            app,
-            host="0.0.0.0",
-            port=VAULT_MCP_PORT,
-            log_level="info",
-            proxy_headers=True,
-            forwarded_allow_ips="*",
-        )
-    except Exception as e:
-        logger.warning(f"Could not build app ({e}), falling back to mcp.run()")
-        logger.warning("Auth will NOT be enforced in this mode")
-        mcp.run(transport="streamable-http", port=VAULT_MCP_PORT)
+    app.add_middleware(BearerAuthMiddleware)
+    logger.info(f"Starting server on {VAULT_MCP_HOST}:{VAULT_MCP_PORT} with bearer auth + OAuth")
 
+    import uvicorn
+    uvicorn.run(
+        app,
+        host=VAULT_MCP_HOST,
+        port=VAULT_MCP_PORT,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="127.0.0.1",
+    )
 
 if __name__ == "__main__":
     main()
