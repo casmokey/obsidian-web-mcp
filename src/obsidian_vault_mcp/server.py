@@ -13,7 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from . import token_store
-from .config import VAULT_MCP_PORT, VAULT_MCP_TOKEN, VAULT_PATH
+from .config import VAULT_MCP_PORT, VAULT_MCP_PUBLIC_HOSTS, VAULT_MCP_TOKEN, VAULT_PATH
 from .frontmatter_index import FrontmatterIndex
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,12 @@ mcp = FastMCP(
             "127.0.0.1:*",
             "localhost:*",
             "[::1]:*",
-            # Add your tunnel hostname here, e.g.:
-            # "vault-mcp.example.com",
+            *VAULT_MCP_PUBLIC_HOSTS,
+        ],
+        allowed_origins=[
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            *(f"https://{h}" for h in VAULT_MCP_PUBLIC_HOSTS),
         ],
     ),
 )

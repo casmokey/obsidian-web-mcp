@@ -113,10 +113,10 @@ async def protected_resource_metadata(request: Request) -> JSONResponse:
 
 # ------------------------------------------------------------------ authorize
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Vault</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{name}</title>
 <style>body{{font:16px system-ui,sans-serif;max-width:26rem;margin:4rem auto;padding:0 1rem;color:#222}}
 input,button{{font:inherit;padding:.5rem;width:100%;box-sizing:border-box;margin:.4rem 0}}
-.err{{color:#a00}}</style></head><body><h1>Obsidian vault</h1>{body}</body></html>"""
+.err{{color:#a00}}</style></head><body><h1>{name}</h1>{body}</body></html>"""
 
 _PAGE_HEADERS = {
     "Cache-Control": "no-store",
@@ -131,7 +131,7 @@ _FIELDS = ("response_type", "client_id", "redirect_uri", "state", "code_challeng
 
 
 def _page(body: str, status: int = 200) -> HTMLResponse:
-    return HTMLResponse(PAGE.format(body=body), status_code=status, headers=_PAGE_HEADERS)
+    return HTMLResponse(PAGE.format(body=body, name=html.escape(config.VAULT_MCP_NAME)), status_code=status, headers=_PAGE_HEADERS)
 
 
 def _form(q: dict, error: str = "") -> HTMLResponse:

@@ -7,6 +7,11 @@ VAULT_MCP_TOKEN = os.environ.get("VAULT_MCP_TOKEN", "")
 VAULT_MCP_PORT = int(os.environ.get("VAULT_MCP_PORT", "8420"))
 # Loopback only by default: a Cloudflare tunnel (or Claude Code on this machine) reaches it there.
 VAULT_MCP_HOST = os.environ.get("VAULT_MCP_HOST", "127.0.0.1")
+# Public hostnames the tunnel forwards (comma-separated, e.g. "homebase.example.com"). Requests with
+# any other Host header are refused (DNS rebinding protection). Empty = local access only.
+VAULT_MCP_PUBLIC_HOSTS = [h.strip() for h in os.environ.get("VAULT_MCP_PUBLIC_HOSTS", "").split(",") if h.strip()]
+# Shown on the sign-in page, so it's clear which vault (and which password) a client is asking for.
+VAULT_MCP_NAME = os.environ.get("VAULT_MCP_NAME", "Obsidian vault")
 
 # OAuth 2.0 (for Claude app integration): scrypt hash of the connector password typed on the
 # authorize page. Unset = no client can be authorized.

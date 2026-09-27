@@ -87,3 +87,31 @@ def test_pkce_and_https_required(client):
 def test_client_credentials_grant_is_gone(client):
     r = client.post("/oauth/token", data={"grant_type": "client_credentials", "client_id": "a", "client_secret": "b"})
     assert r.json()["error"] == "unsupported_grant_type"
+
+
+def test_sign_in_page_names_the_vault(client, monkeypatch):
+    monkeypatch.setattr(config, "VAULT_MCP_NAME", "Homebase <vault>")
+    _, challenge = _pkce()
+    r = client.get("/oauth/authorize", params={"response_type": "code", "client_id": "x", "redirect_uri": REDIRECT,
+                                               "code_challenge": challenge, "code_challenge_method": "S256"})
+    assert "<h1>Homebase &lt;vault&gt;</h1>" in r.text
+
+
+def test_public_hosts_pass_dns_rebinding_check():
+    """VAULT_MCP_PUBLIC_HOSTS lets the tunnel hostname through; other hosts stay refused."""
+    import os
+    import subprocess
+    import sys
+    code = (
+        "from mcp.server.transport_security import TransportSecurityMiddleware as M\n"
+        "from obsidian_vault_mcp import server\n"
+        "m = M(server.mcp.settings.transport_security)\n"
+        "assert m._validate_host('homebase.example.com')\n"
+        "assert m._validate_host('127.0.0.1:8421')\n"
+        "assert not m._validate_host('evil.example.com')\n"
+        "assert m._validate_origin('https://homebase.example.com')\n"
+        "assert not m._validate_origin('https://evil.example.com')\n"
+    )
+    env = os.environ | {"VAULT_MCP_PUBLIC_HOSTS": "homebase.example.com"}
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
