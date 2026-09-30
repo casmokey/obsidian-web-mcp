@@ -74,3 +74,18 @@ def test_vault_delete_requires_confirm(vault_dir):
     result = json.loads(vault_delete("delete-me.md", confirm=False))
     assert "error" in result
     assert (vault_dir / "delete-me.md").exists()  # still there
+
+
+def test_tools_serialize_yaml_dates(vault_dir):
+    """Unquoted YAML dates (Obsidian's default) load as date objects; the tools must still return JSON."""
+    (vault_dir / "dated.md").write_text("---\ntype: change\ndate: 2026-09-30\n---\n\nDated note.\n")
+
+    result = json.loads(vault_read("dated.md"))
+    assert result["frontmatter"]["date"] == "2026-09-30"
+
+    batch = json.loads(vault_batch_read(["dated.md"]))
+    assert batch["files"][0]["frontmatter"]["date"] == "2026-09-30"
+
+    search = json.loads(vault_search("Dated note"))
+    assert "error" not in search
+    assert search["results"][0]["frontmatter_excerpt"]["date"] == "2026-09-30"

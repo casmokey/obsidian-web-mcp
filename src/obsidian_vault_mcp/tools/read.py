@@ -29,7 +29,7 @@ def vault_read(path: str) -> str:
             "content": content,
             "metadata": metadata,
             "frontmatter": fm_data,
-        })
+        }, default=str)  # YAML dates (e.g. `date: 2026-09-30`) load as date objects
     except ValueError as e:
         return json.dumps({"error": str(e), "path": path})
     except FileNotFoundError:
@@ -74,4 +74,4 @@ def vault_batch_read(paths: list[str], include_content: bool = True) -> str:
             results.append({"path": path, "error": str(e)})
             missing += 1
 
-    return json.dumps({"files": results, "found": found, "missing": missing})
+    return json.dumps({"files": results, "found": found, "missing": missing}, default=str)
