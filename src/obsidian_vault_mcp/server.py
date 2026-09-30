@@ -4,6 +4,7 @@ Exposes read/write access to an Obsidian vault over Streamable HTTP.
 Designed to run behind Cloudflare Tunnel for secure remote access.
 """
 
+import asyncio
 import json
 import logging
 import sys
@@ -24,17 +25,10 @@ frontmatter_index = FrontmatterIndex()
 
 @asynccontextmanager
 async def lifespan(server):
-    """Start frontmatter index on server startup, stop on shutdown."""
-    logger.info(f"Starting vault MCP server. Vault: {VAULT_PATH}")
-    token_store.init()
-    purged = await token_store.purge_expired()
-    if purged:
-        logger.info(f"OAuth token store: purged {purged} expired rows")
-    frontmatter_index.start()
-    logger.info(f"Frontmatter index built: {frontmatter_index.file_count} files indexed")
+    """Per-session hook. With stateless_http=True the MCP library enters this on EVERY request, so it must
+    stay cheap: the one-time work (token store, index build, file watcher) is done in main(). Doing it
+    here rebuilt the index (3-4 s, blocking) and leaked a file watcher on each request."""
     yield {"frontmatter_index": frontmatter_index}
-    frontmatter_index.stop()
-    logger.info("Vault MCP server shut down.")
 
 
 # Create the MCP server
@@ -215,7 +209,14 @@ def main():
     # in the lifespan because FastMCP's streamable_http_app doesn't always
     # propagate a custom lifespan reliably.
     token_store.init()
+    purged = asyncio.run(token_store.purge_expired())
+    if purged:
+        logger.info(f"OAuth token store: purged {purged} expired rows")
     logger.info("OAuth token store ready")
+
+    # Build the frontmatter index and start its file watcher once, for the life of the process
+    # (not in the lifespan: see there).
+    frontmatter_index.start()
 
     # Build the Starlette app with auth middleware and OAuth endpoints. If that fails, stop:
     # never serve the vault without auth.
@@ -236,14 +237,18 @@ def main():
     logger.info(f"Starting server on {VAULT_MCP_HOST}:{VAULT_MCP_PORT} with bearer auth + OAuth")
 
     import uvicorn
-    uvicorn.run(
-        app,
-        host=VAULT_MCP_HOST,
-        port=VAULT_MCP_PORT,
-        log_level="info",
-        proxy_headers=True,
-        forwarded_allow_ips="127.0.0.1",
-    )
+    try:
+        uvicorn.run(
+            app,
+            host=VAULT_MCP_HOST,
+            port=VAULT_MCP_PORT,
+            log_level="info",
+            proxy_headers=True,
+            forwarded_allow_ips="127.0.0.1",
+        )
+    finally:
+        frontmatter_index.stop()
+        logger.info("Vault MCP server shut down.")
 
 if __name__ == "__main__":
     main()

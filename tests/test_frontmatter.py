@@ -72,3 +72,25 @@ def test_frontmatter_merge(vault_dir):
     assert post2.metadata["status"] == "active"  # preserved
     assert post2.metadata["new_field"] == "new_value"  # added
     assert original_body.strip() in post2.content  # body preserved
+
+
+def test_start_twice_keeps_one_watcher(index):
+    """A second start() must not build a second file watcher (the per-request leak)."""
+    observer = index._observer
+    index.start()
+    assert index._observer is observer
+
+
+def test_lifespan_is_cheap_and_starts_nothing(vault_dir):
+    """The MCP library enters the lifespan on every stateless request: it must not build or watch anything."""
+    import asyncio
+
+    from obsidian_vault_mcp import server
+
+    async def enter_many():
+        for _ in range(5):
+            async with server.lifespan(None) as ctx:
+                assert ctx["frontmatter_index"] is server.frontmatter_index
+
+    asyncio.run(enter_many())
+    assert server.frontmatter_index._observer is None
