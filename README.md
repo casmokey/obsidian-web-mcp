@@ -37,7 +37,11 @@ Obsidian and the MCP server both operate on the same directory of markdown files
 
 This is a server that provides network access to your personal notes. Security is not optional.
 
-**Authentication is enforced on every request.** The server implements OAuth 2.0 authorization code flow with PKCE for initial client authentication (what Claude uses when you connect the integration), plus bearer token validation on every subsequent MCP tool call. No request reaches a tool function without a valid token.
+**Authentication is enforced on every request.** The server implements the OAuth 2.0 authorization code flow with PKCE for initial client authentication (what Claude uses when you connect the integration), plus bearer token validation on every subsequent MCP tool call. No request reaches a tool function without a valid token. Only the OAuth endpoints and `/health` are exempt from bearer auth.
+
+**A connector password gates authorization.** Client registration is open (Claude needs that), so the password typed on the server's authorize page is the security boundary. It is stored only as a scrypt hash (`VAULT_OAUTH_PASSWORD_HASH`); if it is unset, no client can be authorized. Five wrong passwords within 15 minutes lock the page for 15 minutes. Access tokens last 1 hour; refresh tokens last 30 days and rotate on use, and reuse of a rotated refresh token revokes the whole token family.
+
+**The server binds to loopback by default** (`127.0.0.1`), so only a local tunnel or local clients can reach it.
 
 **Your vault is never exposed directly to the internet.** The recommended deployment uses a Cloudflare Tunnel -- an outbound-only encrypted connection. Your machine opens no inbound ports. You can layer Cloudflare Access on top for additional authentication (SSO, device posture checks, IP restrictions) if you want defense in depth.
 
@@ -75,12 +79,14 @@ This is a server that provides network access to your personal notes. Security i
 
 ```bash
 # Clone and enter the project
-git clone https://github.com/yourname/obsidian-web-mcp.git
+git clone https://github.com/casmokey/obsidian-web-mcp.git
 cd obsidian-web-mcp
 
-# Generate auth tokens
+# Admin bearer token for direct (non-OAuth) clients
 export VAULT_MCP_TOKEN=$(python -c "import secrets; print(secrets.token_hex(32))")
-export VAULT_OAUTH_CLIENT_SECRET=$(python -c "import secrets; print(secrets.token_hex(32))")
+
+# Connector password hash for the OAuth authorize page (prompts for a password of 12+ characters)
+export VAULT_OAUTH_PASSWORD_HASH=$(uv run vault-mcp-hash-password)
 
 # Point at your vault
 export VAULT_PATH="$HOME/Obsidian/MyVault"
@@ -89,35 +95,51 @@ export VAULT_PATH="$HOME/Obsidian/MyVault"
 uv run vault-mcp
 ```
 
-The server starts on port 8420 by default. It serves MCP over Streamable HTTP at `/mcp/`.
+The server listens on `127.0.0.1:8420` by default and serves MCP over Streamable HTTP at `/mcp/`. It exits at startup if `VAULT_PATH` is not a directory.
 
 ## Configuration
 
-All configuration is via environment variables:
+All configuration is via environment variables (read in `src/obsidian_vault_mcp/config.py`):
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VAULT_PATH` | Yes | `~/Obsidian/MyVault` | Absolute path to your Obsidian vault directory |
-| `VAULT_MCP_TOKEN` | Yes | (none) | 256-bit bearer token for authenticating MCP requests |
+| `VAULT_PATH` | Yes | `~/Obsidian/MyVault` | Path to your Obsidian vault directory |
+| `VAULT_MCP_TOKEN` | Yes | (none) | Admin bearer token for direct clients. If unset, every authenticated request is rejected |
+| `VAULT_OAUTH_PASSWORD_HASH` | Yes, for OAuth clients | (none) | scrypt hash of the connector password, from `vault-mcp-hash-password`. If unset, no OAuth client can be authorized |
+| `VAULT_MCP_HOST` | No | `127.0.0.1` | Interface the HTTP server binds to |
 | `VAULT_MCP_PORT` | No | `8420` | Port the HTTP server listens on |
-| `VAULT_OAUTH_CLIENT_ID` | No | `vault-mcp-client` | OAuth 2.0 client ID for Claude integration |
-| `VAULT_OAUTH_CLIENT_SECRET` | Yes | (none) | OAuth 2.0 client secret for Claude integration |
+| `VAULT_MCP_PUBLIC_HOSTS` | For remote access | (empty) | Comma-separated public hostnames your tunnel forwards. Requests with any other `Host` header are refused (DNS rebinding protection) |
+| `VAULT_MCP_NAME` | No | `Obsidian vault` | Name shown on the sign-in page |
+| `VAULT_OAUTH_DB_PATH` | No | `~/.local/share/obsidian-vault-mcp/oauth.db` | SQLite file holding OAuth access and refresh tokens |
 
-Generate tokens with: `python -c "import secrets; print(secrets.token_hex(32))"`
+Generate a bearer token with: `python -c "import secrets; print(secrets.token_hex(32))"`
+
+## Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| `8420` (`VAULT_MCP_PORT`) | HTTP, on `VAULT_MCP_HOST` (loopback by default) | MCP at `/mcp/`, OAuth endpoints (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/oauth/authorize`, `/oauth/token`, `/oauth/register`) |
+
+No other ports are opened. Remote access goes through an outbound-only Cloudflare Tunnel that forwards to this port.
+
+## Dependencies
+
+- Runtime (from `pyproject.toml`): `mcp[cli]>=1.9.0`, `python-frontmatter>=1.1.0`, `pydantic>=2.0`, `watchdog>=4.0.0`
+- Dev: `pytest>=8.0`, `pytest-asyncio>=0.23`
+- Optional: `ripgrep` (faster full-text search), `cloudflared` (remote access)
 
 ## Connecting to Claude
 
 The Claude desktop and mobile apps can connect to remote MCP servers via OAuth.
 
-1. Start the server (locally or behind a tunnel)
+1. Start the server (locally or behind a tunnel) with `VAULT_OAUTH_PASSWORD_HASH` set
 2. Open Claude and go to **Settings > Integrations > Add Integration**
 3. Enter your server URL (e.g. `https://vault-mcp.yourdomain.com`)
-4. Enter the OAuth client ID and client secret you configured
-5. Claude will discover the OAuth endpoints automatically and open a browser window
-6. The server auto-approves the authorization (single-user model) and redirects back
-7. Claude now has access to all nine vault tools -- on desktop and mobile
+4. Claude registers itself dynamically, discovers the OAuth endpoints, and opens a browser window
+5. Type the connector password on the server's sign-in page; the server redirects back with an authorization code
+6. Claude now has access to all nine vault tools -- on desktop and mobile
 
-For local-only use (no tunnel), point Claude at `http://localhost:8420`.
+For local-only use (no tunnel), point Claude at `http://localhost:8420`. Clients that do not run OAuth can send `Authorization: Bearer <VAULT_MCP_TOKEN>` directly.
 
 ## Remote Access with Cloudflare Tunnel
 
@@ -132,60 +154,37 @@ export VAULT_MCP_HOSTNAME="vault-mcp.yourdomain.com"
 ./scripts/setup-tunnel.sh
 ```
 
-The script authenticates with Cloudflare, creates a tunnel, writes the config, and sets up the DNS record. You will need a domain managed by Cloudflare.
+The script authenticates with Cloudflare, creates a tunnel named `vault-mcp`, writes `~/.cloudflared/config-vault-mcp.yml` (ingress to `http://localhost:8420`), and sets up the DNS record. You will need a domain managed by Cloudflare. `VAULT_MCP_HOSTNAME` is read by this script only, not by the server.
 
-After setup, add your tunnel hostname to the `allowed_hosts` list in `server.py` so the MCP library's DNS rebinding protection accepts requests from your domain:
+Then tell the server which public hostname to accept:
 
-```python
-allowed_hosts=[
-    "127.0.0.1:*",
-    "localhost:*",
-    "[::1]:*",
-    "vault-mcp.yourdomain.com",  # add your hostname here
-],
+```bash
+export VAULT_MCP_PUBLIC_HOSTS="vault-mcp.yourdomain.com"
 ```
 
-## Production Deployment (macOS)
+If you already run a `cloudflared` instance for other hostnames, add the ingress rule to that configuration instead of running a second connector.
 
-For always-on operation, use launchd to run both the MCP server and the Cloudflare Tunnel as persistent background services that start at login and restart on failure.
+## Production Deployment
 
-### 1. Edit the plist templates
+The server is a single foreground process (`vault-mcp`), so any supervisor that sets the environment variables above and restarts it on failure will do (systemd, launchd, a container, and so on).
+
+### macOS (launchd)
+
+`scripts/launchd/` has plist templates that run the server and the tunnel at login and restart them on failure.
 
 ```bash
 cp scripts/launchd/com.example.vault-mcp.plist ~/Library/LaunchAgents/
 cp scripts/launchd/com.example.cloudflared-vault.plist ~/Library/LaunchAgents/
 ```
 
-Open each plist and replace the placeholder tokens:
-- `REPLACE_WITH_UV_PATH` -- path to `uv` binary (run `which uv`)
-- `REPLACE_WITH_PROJECT_PATH` -- absolute path to this project directory
-- `REPLACE_WITH_VAULT_PATH` -- absolute path to your Obsidian vault
-- `REPLACE_WITH_TOKEN` -- your `VAULT_MCP_TOKEN` value
-- `REPLACE_WITH_OAUTH_SECRET` -- your `VAULT_OAUTH_CLIENT_SECRET` value
-- `REPLACE_WITH_HOME` -- your home directory (e.g. `/Users/yourname`)
-- `REPLACE_WITH_CLOUDFLARED_PATH` -- path to `cloudflared` binary (run `which cloudflared`)
-
-### 2. Load the services
+Replace the `REPLACE_WITH_*` placeholders in each plist (paths to `uv`, the project, the vault and `cloudflared`, your home directory, and the token values). Note that `com.example.vault-mcp.plist` still sets the old `VAULT_OAUTH_CLIENT_ID` and `VAULT_OAUTH_CLIENT_SECRET` variables, which the server no longer reads: replace them with `VAULT_OAUTH_PASSWORD_HASH` (and add `VAULT_MCP_PUBLIC_HOSTS` for remote access).
 
 ```bash
 launchctl load ~/Library/LaunchAgents/com.example.vault-mcp.plist
 launchctl load ~/Library/LaunchAgents/com.example.cloudflared-vault.plist
 ```
 
-Both services are configured with `RunAtLoad` (start at login) and `KeepAlive` (restart on failure). They will survive reboots.
-
-### 3. Verify
-
-```bash
-# Check both services are running
-launchctl list | grep vault
-
-# Test the server responds
-curl -s http://localhost:8420/.well-known/oauth-authorization-server
-
-# Check logs
-tail -f ~/Library/Logs/vault-mcp-error.log
-```
+Verify with `launchctl list | grep vault`, `curl -s http://localhost:8420/.well-known/oauth-authorization-server`, and `tail -f ~/Library/Logs/vault-mcp-error.log`.
 
 ## Obsidian Sync Compatibility
 
@@ -213,8 +212,9 @@ src/obsidian_vault_mcp/
     config.py               # Environment variable configuration
     frontmatter_index.py    # In-memory YAML frontmatter index with filesystem watcher
     models.py               # Pydantic input validation models
-    oauth.py                # OAuth 2.0 authorization code flow with PKCE
+    oauth.py                # OAuth 2.0 authorization code flow with PKCE, connector password page
     server.py               # FastMCP server setup, tool registration, entry point
+    token_store.py          # SQLite-backed OAuth access/refresh tokens with rotation
     vault.py                # Core filesystem operations (path security, atomic writes)
     tools/
         manage.py           # list, move, delete tools
@@ -224,6 +224,7 @@ src/obsidian_vault_mcp/
 tests/
     conftest.py             # Shared fixtures (temp vault with sample files)
     test_frontmatter.py     # Frontmatter index and query tests
+    test_oauth.py           # OAuth flow, password and token store tests
     test_tools.py           # Integration tests for tool functions
     test_vault.py           # Path resolution and file operation tests
 scripts/
