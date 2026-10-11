@@ -33,6 +33,13 @@ def resolve_vault_path(relative_path: str) -> Path:
     if not str(resolved).startswith(str(vault_root) + os.sep) and resolved != vault_root:
         raise ValueError("Path resolves outside the vault root")
 
+    # A symlink must not smuggle a request into a hidden directory (e.g. link -> .obsidian).
+    for part in resolved.relative_to(vault_root).parts:
+        if part.startswith("."):
+            raise ValueError(
+                f"Path resolves into '{part}'; dotfiles and hidden directories are not allowed"
+            )
+
     return resolved
 
 
@@ -142,10 +149,15 @@ def delete_path(relative_path: str) -> bool:
 
     dest = trash_dir / path.name
 
-    # Avoid collisions in .trash by appending a timestamp
+    # Avoid collisions in .trash by appending a timestamp (and a counter if that is taken too,
+    # so a second delete in the same second can't overwrite an earlier trashed copy).
     if dest.exists():
         ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
         dest = trash_dir / f"{path.stem}_{ts}{path.suffix}"
+        n = 1
+        while dest.exists():
+            dest = trash_dir / f"{path.stem}_{ts}_{n}{path.suffix}"
+            n += 1
 
     shutil.move(str(path), str(dest))
     return True
@@ -184,6 +196,10 @@ def list_directory(
         for entry in entries:
             # Skip excluded directories at every level
             if entry.name in config.EXCLUDED_DIRS:
+                continue
+
+            # Never list through a symlink that leads out of the vault
+            if entry.is_symlink() and not entry.resolve().is_relative_to(vault_root):
                 continue
 
             is_dir = entry.is_dir()
