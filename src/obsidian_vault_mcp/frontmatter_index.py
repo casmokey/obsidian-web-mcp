@@ -34,6 +34,8 @@ class FrontmatterIndex:
         for md_path in config.VAULT_PATH.rglob("*.md"):
             if self._is_excluded(md_path):
                 continue
+            if not md_path.resolve().is_relative_to(config.VAULT_PATH.resolve()):
+                continue  # symlink pointing out of the vault
             rel = str(md_path.relative_to(config.VAULT_PATH))
             fm = self._parse_frontmatter(md_path)
             if fm is not None:

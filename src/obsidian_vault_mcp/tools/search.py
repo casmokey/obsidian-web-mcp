@@ -29,12 +29,14 @@ def _search_ripgrep(
         f"--glob={file_pattern}",
         "-i",
         f"--context={context_lines}",
-        query,
-        str(search_path),
     ]
 
     for excluded in config.EXCLUDED_DIRS:
-        cmd.insert(-2, f"--glob=!{excluded}/")
+        cmd.append(f"--glob=!{excluded}/")
+
+    # "-e" pins the query as the pattern and "--" ends option parsing, so a query such as
+    # "--pre=cmd" can never be read as an rg option.
+    cmd += ["-e", query, "--", str(search_path)]
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -73,6 +75,14 @@ def _search_ripgrep(
     return matches
 
 
+def _inside_vault(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(config.VAULT_PATH.resolve())
+    except ValueError:
+        return False
+    return True
+
+
 def _search_python(
     query: str,
     search_path: Path,
@@ -91,6 +101,10 @@ def _search_python(
             continue
 
         if any(part in config.EXCLUDED_DIRS for part in file_path.parts):
+            continue
+
+        # A symlink inside the vault must not expose files outside it (rg skips symlinks too).
+        if not _inside_vault(file_path):
             continue
 
         if not fnmatch.fnmatch(file_path.name, file_pattern):

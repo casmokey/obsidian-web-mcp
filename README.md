@@ -200,7 +200,13 @@ The server coexists with Obsidian Sync (or any file-based sync mechanism) withou
 ### Running tests
 
 ```bash
-uv run pytest tests/ -v
+uv run --extra dev pytest tests/ -v
+```
+
+With a line-coverage report per module:
+
+```bash
+uv run --extra dev --with pytest-cov pytest tests/ --cov=obsidian_vault_mcp --cov-report=term-missing
 ```
 
 Tests use temporary directories and never touch your real vault.
@@ -223,7 +229,12 @@ src/obsidian_vault_mcp/
         write.py            # write, batch_frontmatter_update tools
 tests/
     conftest.py             # Shared fixtures (temp vault with sample files)
+    test_auth.py            # Bearer middleware, plus the assembled HTTP app (auth, host check)
     test_frontmatter.py     # Frontmatter index and query tests
+    test_oauth.py           # OAuth happy path and core guarantees
+    test_oauth_extra.py     # OAuth edge cases: redirects, PKCE, refresh, password hashing
+    test_path_safety.py     # Traversal, symlink escape, delete/move/write safety, search injection
+    test_token_store.py     # Token expiry, rotation, reuse detection
     test_tools.py           # Integration tests for tool functions
     test_vault.py           # Path resolution and file operation tests
 scripts/

@@ -55,7 +55,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         # Admin token (VAULT_MCP_TOKEN) bypasses the OAuth store -- for direct
         # bearer clients that don't run the OAuth flow.
-        if VAULT_MCP_TOKEN and hmac.compare_digest(token, VAULT_MCP_TOKEN):
+        if VAULT_MCP_TOKEN and hmac.compare_digest(token.encode(), VAULT_MCP_TOKEN.encode()):
             return await call_next(request)
 
         if await token_store.validate_access(token):
